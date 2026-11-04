@@ -1,3 +1,5 @@
+# code baseline
+
 import io, random
 from datetime import date, datetime, timedelta
 import psycopg2
@@ -5,27 +7,26 @@ from faker import Faker
 
 CONFIG = {
     "baseline": {
-        "pemasok": 349,
-        "permintaan_pengadaan": 209,
-        "kontrak": 175
-    },
-
-    "stress_test": {
         "pemasok": 1000,
         "permintaan_pengadaan": 600,
         "kontrak": 500
+    },
+
+    "stress_test": {
+        "pemasok": 100000,
+        "permintaan_pengadaan": 60000,
+        "kontrak": 50000
     }
 }
 
-MODE = "baseline"
-
+MODE = "stress_test"
 JUMLAH_DATA = CONFIG[MODE]
-
+N_KONTRAK = JUMLAH_DATA["kontrak"]
 TODAY = date(2026, 11, 3)
 random.seed(42); Faker.seed(42)
 fake = Faker("id_ID")
 
-conn = psycopg2.connect(host="192.168.0.181", dbname="telkome_baseline",
+conn = psycopg2.connect(host="192.168.0.181", dbname="telkom",
                         user="postgres", password="mandat4" , port=5432)
 cur = conn.cursor()
 
@@ -107,6 +108,14 @@ for i in range(1, N_REQ + 1):
     tender.append((i, f"Tender {fake.bs()[:60]}", buka, tutup, st, i))
 bulk("permintaan_pengadaan", ["id_permintaan", "tanggal_inisiasi", "deskripsi_kebutuhan",
                               "estimasi_nilai_harga", "id_unit"], req)
+
+tender_untuk_kontrak = set(random.sample(range(1, N_REQ + 1), N_KONTRAK))
+
+tender = [
+    t[:4] + ("Tutup",) + t[5:] if t[0] in tender_untuk_kontrak else t
+    for t in tender
+]
+
 bulk("tender", ["id_tender", "judul_tender", "tanggal_buka", "tanggal_tutup",
                 "status_tender", "id_permintaan"], tender)
 
@@ -122,7 +131,7 @@ bulk("dokumen_pengadaan", ["id_dokumen", "nomor_dokumen", "deskripsi_dokumen",
 
 props, list_proposal, prid = [], {}, 1
 for t in tender:
-    for p in random.sample(pemasok_valid, random.randint(2, 8)):        
+    for p in random.sample(pemasok_valid, 5):        
         tgl = d(t[2], 0, max(0, (min(t[3], TODAY) - t[2]).days))
         nilai = round(estimasi[t[0]] * random.uniform(0.8, 1.1), 2)
         props.append((prid, tgl, nilai, f"https://example.com/proposal/{prid}.pdf", t[0], p))
@@ -132,7 +141,7 @@ bulk("proposal_penawaran", ["id_proposal", "tanggal_penawaran", "nilai_penawaran
                             "dokumen_proposal", "id_tender", "id_pemasok"], props)
 
 # contoh kontrak, po, dan evaluasi
-tender_tutup = [t for t in tender if t[4] == "Tutup"]
+tender_tutup = [t for t in tender if t[0] in tender_untuk_kontrak]
 random.shuffle(tender_tutup)
 kontrak, po, qcds, esg, akhir, k_nilai = [], [], [], [], [], {}
 poid = 1
@@ -142,18 +151,17 @@ for kid, t in enumerate(tender_tutup[:JUMLAH_DATA["kontrak"]], start=1):
     mulai = d(t[3], 7, 20)
     selesai = None if random.random() < 0.1 else d(mulai, 180, 540)
     kontrak.append((kid, f"K-{mulai.year}-{kid:06d}", mulai, selesai, t[0], win[0], t[5]))
-    n_po = random.randint(2, 6)
+    n_po = 4
     for _ in range(n_po):
         terbit = d(mulai, 1, 30); tenggat = d(terbit, 14, 60)
         sts = 2 if (tenggat < TODAY and random.random() < 0.7) else 1
         po.append((poid, f"PO-{poid:08d}", terbit, round(win[1] / n_po, 2), tenggat, sts, kid))
         poid += 1
     q = [round(random.triangular(10, 25, 19), 2) for _ in range(4)]
+    qcds.append((kid, *q, win[0], kid, random.randint(1, 5)))
     e = [round(random.triangular(8, 20, 16), 2) for _ in range(5)]
     pakta = random.random() < 0.95
-    qcds.append((kid, *q, win[0], kid, random.randint(1, 5)))
-    esg.append((kid, datetime.combine(d(mulai, 30, 120), datetime.min.time()), *e, pakta,
-                win[0], kid, random.randint(1, 5)))
+    esg.append((kid, datetime.combine(d(mulai, 30, 120), datetime.min.time()), *e, pakta, win[0], kid, random.randint(1, 5)))
     if random.random() < 0.7:       
         s_esg, s_q = sum(e), sum(q)
         if (not pakta) or s_esg < 50:   h = "Blacklist"
